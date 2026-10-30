@@ -54,7 +54,7 @@ const context = await chromium.launchPersistentContext(userDir, {
 // ---- the PC program, through a real MCP client ----
 const transport = new StdioClientTransport({
   command: process.execPath,
-  args: [path.join(root, 'host', 'server.js')],
+  args: [path.join(process.env.HOST_DIR || path.join(root, 'host'), 'server.js')],
   env: { ...process.env, MY_BROWSER_PORT: String(PORT) },
   stderr: 'pipe',
 });

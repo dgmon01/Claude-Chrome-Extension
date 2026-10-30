@@ -1,0 +1,91 @@
+{
+  "manifest_version": "0.3",
+  "name": "my-browser",
+  "display_name": "My Browser",
+  "version": "1.0.0",
+  "description": "Lets Claude read and use websites in your own Chrome, through the My Browser extension. No site blocklist; asks first before paying, sending, posting, deleting, changing account settings or uploading.",
+  "author": {
+    "name": "Dhanush"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "server.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server.js"
+      ],
+      "env": {
+        "MY_BROWSER_PORT": "${user_config.port}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "tabs_context_mcp",
+      "description": "List the tabs you can use (the \"My Browser\" tab group) with their tab IDs. Call this first."
+    },
+    {
+      "name": "tabs_create_mcp",
+      "description": "Open a new tab in the \"My Browser\" tab group, optionally at a URL. Returns its tab ID."
+    },
+    {
+      "name": "tabs_close_mcp",
+      "description": "Close a tab in the \"My Browser\" tab group."
+    },
+    {
+      "name": "navigate",
+      "description": "Go to a URL in a tab and wait for it to load (up to 30 seconds). Use \"back\" or \"forward\" for history."
+    },
+    {
+      "name": "get_page_text",
+      "description": "Get the visible text of the page (up to 60,000 characters). Best for reading articles, posts and search results."
+    },
+    {
+      "name": "read_page",
+      "description": "Get the page structure (headings, links, buttons, fields) with [ref_N] ids you can pass to computer (ref) or form_input."
+    },
+    {
+      "name": "find",
+      "description": "Find elements on the page by a short description, for example \"search box\" or \"login button\". Keyword match; returns [ref_N] ids."
+    },
+    {
+      "name": "computer",
+      "description": "Use the mouse and keyboard in a tab, or take a screenshot. Coordinates are CSS pixels in the visible part of the page (as in the screenshot). You can pass ref instead of coordinate for clicks."
+    },
+    {
+      "name": "form_input",
+      "description": "Set the value of a form field (text box, list, checkbox, radio) by its ref from read_page or find."
+    },
+    {
+      "name": "javascript_tool",
+      "description": "Run JavaScript in the page and return the result of the last expression (top-level await and return are allowed)."
+    }
+  ],
+  "keywords": [
+    "browser",
+    "chrome"
+  ],
+  "license": "MIT",
+  "compatibility": {
+    "platforms": [
+      "win32",
+      "darwin",
+      "linux"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  },
+  "user_config": {
+    "port": {
+      "type": "number",
+      "title": "Port",
+      "description": "Local port shared with the My Browser Chrome extension. Leave as 47615 unless something else uses it (then change it in the extension too: toolbar icon > Advanced).",
+      "default": 47615,
+      "required": false,
+      "min": 1024,
+      "max": 65535
+    }
+  }
+}
