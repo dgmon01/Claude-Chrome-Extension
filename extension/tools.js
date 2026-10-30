@@ -35,13 +35,13 @@ function explain(e) {
 }
 
 // Chrome briefly refuses tab changes while the tab strip is busy ("Tabs cannot be edited
-// right now (user may be dragging a tab)"). Retry for up to 2 seconds before giving up.
+// right now (user may be dragging a tab)"). Retry for up to 5 seconds before giving up.
 async function tabEdit(fn) {
   for (let i = 0; ; i++) {
     try {
       return await fn();
     } catch (e) {
-      if (i >= 10 || !/cannot be edited right now|dragging a tab/i.test(String(e && e.message))) throw e;
+      if (i >= 25 || !/cannot be edited right now|dragging a tab/i.test(String(e && e.message))) throw e;
       await sleep(200);
     }
   }
@@ -72,6 +72,16 @@ export async function shareTab(tabId) {
 
 export async function unshareTab(tabId) {
   await tabEdit(() => chrome.tabs.ungroup(tabId));
+}
+
+// A new tab Claude can't see (not in the group) would be left behind: close it instead.
+async function shareOrClose(tabId) {
+  try {
+    await shareTab(tabId);
+  } catch (e) {
+    await chrome.tabs.remove(tabId).catch(() => {});
+    throw new Error(`Couldn't add the new tab to the "My Browser" group, so it was closed again (${e.message}). Try once more.`);
+  }
 }
 
 async function checkTab(tabId) {
@@ -137,7 +147,9 @@ export function detachAll() {
 function normalizeUrl(url) {
   if (!url) return url;
   url = String(url).trim();
-  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return url;
+  // Local addresses (router pages, local servers) usually have no https.
+  if (/^(localhost|\d{1,3}(\.\d{1,3}){3}|\[[0-9a-f:]+\])(:\d+)?([\/?#]|$)/i.test(url)) return 'http://' + url;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url) || /^(about|data|javascript|chrome|file|view-source|mailto):/i.test(url)) return url;
   return 'https://' + url;
 }
 
@@ -195,7 +207,7 @@ async function tabs_context_mcp({ createIfEmpty } = {}) {
   let tabs = (await chrome.tabs.query({})).filter((t) => ids.has(t.groupId));
   if (!tabs.length && createIfEmpty) {
     const tab = await tabEdit(() => chrome.tabs.create({ url: 'about:blank', active: true }));
-    await shareTab(tab.id);
+    await shareOrClose(tab.id);
     tabs = [await chrome.tabs.get(tab.id)];
   }
   const list = tabs.map((t) => ({ tabId: t.id, title: t.title, url: t.url || t.pendingUrl }));
@@ -207,7 +219,7 @@ async function tabs_context_mcp({ createIfEmpty } = {}) {
 
 async function tabs_create_mcp({ url } = {}) {
   const tab = await tabEdit(() => chrome.tabs.create({ url: normalizeUrl(url) || 'about:blank', active: true }));
-  await shareTab(tab.id);
+  await shareOrClose(tab.id);
   if (url) await waitForLoad(tab.id, 30000);
   const t = await chrome.tabs.get(tab.id);
   return ok(JSON.stringify({ tabId: t.id, title: t.title, url: t.url || t.pendingUrl }, null, 2));

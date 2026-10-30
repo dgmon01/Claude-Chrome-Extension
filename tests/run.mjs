@@ -397,6 +397,46 @@ try {
     await call('computer', { tabId: TAB, action: 'left_click', coordinate: [Math.round(det[0] * f), Math.round(det[1] * f)] });
     check('a click at screenshot coordinates hits the right button', (await js("document.getElementById('out').textContent")) === 'clicked:plain');
 
+    // Audit 2: web components, closed shadow roots, deep nesting, display:contents links, iframes.
+    await call('navigate', { tabId: TAB, url: `${WEB}/wc.html` });
+    await new Promise((r) => setTimeout(r, 500));
+    const wcTree = textOf(await call('read_page', { tabId: TAB, filter: 'interactive' }));
+    check('a web-component button gets its slotted label', /button "Buy now"/.test(wcTree), wcTree);
+    check('read_page sees inside closed shadow roots', /textbox "Search closed box"/.test(wcTree) && /button "Pay now"/.test(wcTree), wcTree);
+    check('read_page lists a link 40 levels deep', /link "Deep link"/.test(wcTree), wcTree);
+    check('read_page lists a display:contents link', /link "Contents link"/.test(wcTree), wcTree);
+    check('read_page lists the iframe and says its contents are not read', /iframe "Embedded article".*not read/.test(wcTree), wcTree);
+    const fc = textOf(await call('find', { tabId: TAB, query: 'search closed' }));
+    check('find sees a search box in a closed shadow root', /textbox "Search closed box"/.test(fc), fc);
+    const shot3 = await call('computer', { tabId: TAB, action: 'screenshot' });
+    const im3 = (shot3.content || []).find((c) => c.type === 'image');
+    const f3 = jpegSize(im3.data)[0] / Number(await js('innerWidth'));
+    const buyBox = JSON.parse(await js("JSON.stringify((r => [r.left + 6, r.top + 6])(document.getElementById('buy').getBoundingClientRect()))"));
+    const wb = await call('computer', { tabId: TAB, action: 'left_click', coordinate: [Math.round(buyBox[0] * f3), Math.round(buyBox[1] * f3)] });
+    check('click on the padding of a web-component "Buy now" asks first', /NEEDS CONFIRMATION/.test(textOf(wb)) && (await js("document.getElementById('out').textContent")) === '', textOf(wb));
+    const payBox = JSON.parse(await js("JSON.stringify((r => [r.left + r.width / 2, r.top + r.height / 2])(document.getElementById('pay').getBoundingClientRect()))"));
+    const wp = await call('computer', { tabId: TAB, action: 'left_click', coordinate: [Math.round(payBox[0] * f3), Math.round(payBox[1] * f3)] });
+    check('click on "Pay now" inside a closed shadow root asks first', /NEEDS CONFIRMATION/.test(textOf(wp)) && (await js("document.getElementById('out').textContent")) === '', textOf(wp));
+    const cl = await call('computer', { tabId: TAB, action: 'left_click', ref: (wcTree.match(/link "Contents link".*\[(ref_\d+)\]/) || [])[1] });
+    await new Promise((r) => setTimeout(r, 800));
+    check('a display:contents link can be clicked by ref', /Test article/.test(textOf(await call('tabs_context_mcp'))), textOf(cl));
+
+    // Local addresses open over http.
+    const ip = await call('navigate', { tabId: TAB, url: '127.0.0.1:8123/text.html' });
+    check('an IP address without http:// opens over http', /Test article/.test(textOf(ip)) && /http:\/\/127\.0\.0\.1:8123/.test(textOf(ip)), textOf(ip));
+
+    // A new tab that can't join the group is closed again, not left behind.
+    const swk = context.serviceWorkers()[0];
+    const before = await swk.evaluate(async () => (await chrome.tabs.query({})).length);
+    await swk.evaluate(() => { self.__origGroup = chrome.tabs.group; chrome.tabs.group = () => Promise.reject(new Error('Tabs cannot be edited right now (user may be dragging a tab).')); });
+    const stuck = await call('tabs_create_mcp', { url: `${WEB}/text.html` });
+    await swk.evaluate(() => { chrome.tabs.group = self.__origGroup; });
+    const after = await swk.evaluate(async () => (await chrome.tabs.query({})).length);
+    check('a tab that cannot join the group is closed, not left behind', stuck.isError && after === before, `${textOf(stuck)} | tabs before ${before}, after ${after}`);
+    const okAgain = await call('tabs_create_mcp', { url: `${WEB}/text.html` });
+    check('creating a tab works again afterwards', !okAgain.isError, textOf(okAgain));
+    await call('tabs_close_mcp', { tabId: JSON.parse(textOf(okAgain)).tabId });
+
     // Scroll, hover, wait.
     await call('navigate', { tabId: TAB, url: `${WEB}/long.html` });
     await call('computer', { tabId: TAB, action: 'scroll', scroll_direction: 'down', scroll_amount: 5 });

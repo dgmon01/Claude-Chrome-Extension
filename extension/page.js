@@ -7,8 +7,42 @@ export function pageAgent(cmd, args) {
 
   const clean = (s, n = 100) => (s || '').replace(/\s+/g, ' ').trim().slice(0, n);
 
+  // Open or closed shadow root (chrome.dom can open closed ones from an extension).
+  // It only accepts HTML elements (an SVG icon would throw).
+  const rootOf = (el) => {
+    if (el.shadowRoot) return el.shadowRoot;
+    if (!(el instanceof HTMLElement) || !chrome.dom || !chrome.dom.openOrClosedShadowRoot) return null;
+    try { return chrome.dom.openOrClosedShadowRoot(el); } catch (e) { return null; }
+  };
+
+  // Text as the user sees it through shadow roots and slots (innerText doesn't follow them).
+  function flatText(node, budget = { n: 300 }) {
+    let out = '';
+    const visit = (n) => {
+      if (budget.n <= 0) return;
+      if (n.nodeType === Node.TEXT_NODE) { out += n.data + ' '; budget.n -= n.data.length; return; }
+      if (n.nodeType !== Node.ELEMENT_NODE && n.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) return;
+      if (n.nodeType === Node.ELEMENT_NODE) {
+        if (['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT'].includes(n.tagName)) return;
+        if (n.tagName === 'SLOT') {
+          const assigned = n.assignedNodes({ flatten: true });
+          (assigned.length ? assigned : [...n.childNodes]).forEach(visit);
+          return;
+        }
+        const r = rootOf(n);
+        if (r) { [...r.childNodes].forEach(visit); return; }
+      }
+      [...n.childNodes].forEach(visit);
+    };
+    visit(node);
+    return out;
+  }
+
+  // The web component that holds el in its shadow root, if any.
+  const hostOf = (el) => { const r = el.getRootNode(); return r instanceof ShadowRoot ? r.host : null; };
+
   const INTERACTIVE = new Set(['link', 'button', 'textbox', 'searchbox', 'checkbox', 'radio', 'combobox', 'listbox',
-    'option', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'tab', 'switch', 'slider', 'spinbutton', 'treeitem', 'clickable']);
+    'option', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'tab', 'switch', 'slider', 'spinbutton', 'treeitem', 'clickable', 'iframe']);
 
   function refOf(el) {
     let r = S.byEl.get(el);
@@ -46,6 +80,7 @@ export function pageAgent(cmd, args) {
     }
     if (/^h[1-6]$/.test(tag)) return 'heading';
     if (tag === 'img') return 'img';
+    if (tag === 'iframe' || tag === 'frame') return 'iframe';
     if (tag === 'nav') return 'navigation';
     if (tag === 'main') return 'main';
     if (tag === 'form') return 'form';
@@ -73,10 +108,16 @@ export function pageAgent(cmd, args) {
       if (t === 'image') return clean(el.alt || 'submit');
       if (t === 'file') return 'file upload';
       const fromLabel = el.labels && [...el.labels].map((l) => l.innerText).join(' ');
-      return clean(fromLabel || el.placeholder || el.title || el.name);
+      const host = hostOf(el);
+      return clean(fromLabel || el.placeholder || el.title || el.name ||
+        (host && (host.getAttribute('aria-label') || host.getAttribute('placeholder') || host.getAttribute('label'))));
     }
     if (tag === 'img') return clean(el.alt || el.title);
-    return clean(el.innerText || el.title || el.textContent);
+    if (tag === 'iframe' || tag === 'frame') return clean(el.title || el.name || 'embedded frame');
+    const own = clean(el.innerText || el.title) || clean(flatText(el));
+    if (own) return own;
+    const host = hostOf(el);
+    return clean(host ? host.getAttribute('aria-label') || flatText(host) : el.textContent);
   }
 
   function valueOf(el) {
@@ -100,14 +141,16 @@ export function pageAgent(cmd, args) {
   function visibility(el) {
     const s = getComputedStyle(el);
     if (s.display === 'none') return 'prune';
-    if (s.display === 'contents' || s.visibility !== 'visible') return 'pass';
+    if (s.visibility !== 'visible') return 'pass';
+    if (s.display === 'contents') return ['a', 'button'].includes(el.tagName.toLowerCase()) || el.hasAttribute('role') ? 'show' : 'pass';
     if (el.checkVisibility && !el.checkVisibility({ checkVisibilityCSS: true })) return 'prune';
     return 'show';
   }
 
   function kids(el) {
     const list = [];
-    if (el.shadowRoot) list.push(...el.shadowRoot.children);
+    const r = rootOf(el);
+    if (r) list.push(...r.children);
     list.push(...el.children);
     return list;
   }
@@ -118,6 +161,7 @@ export function pageAgent(cmd, args) {
     if (n) s += ` "${n.replace(/"/g, "'")}"`;
     if (role === 'heading') s += ` (h${el.tagName[1] || '?'})`;
     if (role === 'link' && el.href) s += ` href="${el.href.slice(0, 120)}"`;
+    if (role === 'iframe') s += ` src="${(el.src || '').slice(0, 120)}" (its contents are not read: use a screenshot and computer clicks there)`;
     const v = valueOf(el);
     if (v) s += ` value="${v}"`;
     if (el.disabled) s += ' (disabled)';
@@ -129,8 +173,11 @@ export function pageAgent(cmd, args) {
     const out = [];
     let size = 0;
     let cut = false;
+    let deepCut = false;
+    // Depth counts listed elements only, so wrapper divs and shadow hops don't use it up.
     const walk = (el, d, indent) => {
-      if (cut || d > depth || !(el instanceof Element)) return;
+      if (cut || !(el instanceof Element)) return;
+      if (indent > depth) { deepCut = true; return; }
       const tag = el.tagName.toLowerCase();
       if (['script', 'style', 'noscript', 'template', 'svg', 'head'].includes(tag)) return;
       if (el.getAttribute('aria-hidden') === 'true') return;
@@ -147,10 +194,12 @@ export function pageAgent(cmd, args) {
       }
       // Leaf interactive elements: their text is already in the name.
       if (shown && ['link', 'button', 'textbox', 'searchbox', 'combobox', 'listbox', 'heading', 'paragraph', 'option'].includes(role) && filter !== 'all') return;
+      if (role === 'iframe') return;
       for (const c of kids(el)) walk(c, d + 1, shown ? indent + 1 : indent);
     };
     walk(root, 0, 0);
     if (cut) out.push(`(cut at ${maxChars} characters: use ref_id to read part of the page)`);
+    if (deepCut) out.push(`(some content deeper than ${depth} levels was left out: use ref_id or a bigger depth)`);
     return out.join('\n');
   }
 
@@ -180,8 +229,8 @@ export function pageAgent(cmd, args) {
 
   function deepFromPoint(x, y) {
     let el = document.elementFromPoint(x, y);
-    while (el && el.shadowRoot) {
-      const inner = el.shadowRoot.elementFromPoint(x, y);
+    while (el && rootOf(el)) {
+      const inner = rootOf(el).elementFromPoint(x, y);
       if (!inner || inner === el) break;
       el = inner;
     }
@@ -190,7 +239,7 @@ export function pageAgent(cmd, args) {
 
   function deepActive() {
     let el = document.activeElement;
-    while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
+    while (el && rootOf(el) && rootOf(el).activeElement) el = rootOf(el).activeElement;
     return el;
   }
 
@@ -209,7 +258,10 @@ export function pageAgent(cmd, args) {
   const RISKY_FRAME = /(pay|checkout|stripe|braintree|adyen|klarna|afterpay|apple|wallet|billing|purchase|comment|disqus|chat|intercom|zendesk|messenger|crisp|drift|livechat|tawk|hubspot)/i;
 
   function labelOf(el) {
-    return clean(el.getAttribute('aria-label') || el.innerText || el.value || el.title || el.getAttribute('alt') || '', 80);
+    const own = clean(el.getAttribute('aria-label') || el.innerText || el.value || el.title || el.getAttribute('alt') || '', 80) || clean(flatText(el), 80);
+    if (own) return own;
+    const host = hostOf(el);
+    return host ? clean(host.getAttribute('aria-label') || flatText(host), 80) : '';
   }
 
   function riskOfLabel(label) {
@@ -279,7 +331,13 @@ export function pageAgent(cmd, args) {
   function refRect({ ref }) {
     const el = byRef(ref);
     el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-    const r = el.getBoundingClientRect();
+    let r = el.getBoundingClientRect();
+    if (!r.width && !r.height) {
+      // display:contents elements have no box of their own: measure their contents.
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      r = range.getBoundingClientRect();
+    }
     return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), w: r.width, h: r.height };
   }
 

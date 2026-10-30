@@ -1,0 +1,31 @@
+<!doctype html><html><head><title>Web components</title>
+<style>x-btn, pay-box { display: inline-block; margin: 10px; }</style></head>
+<body>
+<x-btn id="buy">Buy now</x-btn>
+<closed-search></closed-search>
+<pay-box id="pay"></pay-box>
+<a style="display:contents" href="/text.html">Contents link</a>
+<div id="deep"></div>
+<iframe src="/text.html" title="Embedded article" width="300" height="80"></iframe>
+<div id="out"></div>
+<script>
+const out = (s) => { document.getElementById('out').textContent = s; };
+customElements.define('x-btn', class extends HTMLElement {
+  constructor() { super(); const r = this.attachShadow({ mode: 'open' });
+    r.innerHTML = '<button style="padding:20px 40px"><slot></slot></button>';
+    r.querySelector('button').addEventListener('click', () => out('bought')); }
+});
+customElements.define('closed-search', class extends HTMLElement {
+  constructor() { super(); const r = this.attachShadow({ mode: 'closed' });
+    r.innerHTML = '<input placeholder="Search closed box">'; }
+});
+customElements.define('pay-box', class extends HTMLElement {
+  constructor() { super(); const r = this.attachShadow({ mode: 'closed' });
+    r.innerHTML = '<button style="width:160px;height:50px">Pay now</button>';
+    r.querySelector('button').addEventListener('click', () => out('paid')); }
+});
+let d = document.getElementById('deep');
+for (let i = 0; i < 40; i++) { const n = document.createElement('div'); d.appendChild(n); d = n; }
+d.innerHTML = '<a href="/text.html">Deep link</a>';
+</script>
+</body></html>
