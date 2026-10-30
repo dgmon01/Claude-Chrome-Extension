@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "My Browser",
+  "version": "1.0.0",
+  "description": "Lets the Claude PC app read and use websites in this Chrome. Works only with the My Browser program on this PC.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA33PDMis/uLSoTzbVdWyyKljjqBDYeRemP+ynegLugIyQ+f5vXwVy2fDBUCY2id3umwt8H2VU/C5tnAxSsqbfBFU1PUsxQaERPKaj8C2NheMSnIgiix1n2GVGYDIXxWGU0yxabmSK0PsYjqTPV03FJTqPSIzvP7emfduyR9b6p5dNXfcnnFtWIZY6DUiCGyjcKG3tzNFHAVWSMFMvgaEFx9WQ0Yy8fOybtUwm+sdlc5fWaArzADeR6ETjxQE+tzRdJ/CXK2B1831UJEL/v/ZhaaY0en4M0PCWlL4JUHivsDaie3jQGsuG4GPeslA3RfO9er5xntFfhmu7TLnJan0ykQIDAQAB",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "scripting",
+    "debugger",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "My Browser"
+  }
+}

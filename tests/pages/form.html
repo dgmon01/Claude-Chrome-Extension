@@ -1,0 +1,27 @@
+<!doctype html><html><head><title>Test form</title>
+<style>button{display:block;margin:6px;padding:6px} #chat{border:1px solid #888;min-height:30px;width:300px}</style></head>
+<body>
+<h1>Form page</h1>
+<form id="search" role="search" onsubmit="event.preventDefault(); out('searched:' + document.getElementById('q').value)">
+  <label for="q">Search the site</label> <input id="q" name="q">
+  <button>Search</button>
+</form>
+<label for="name">Your name</label> <input id="name">
+<label for="color">Favourite colour</label>
+<select id="color"><option value="r">Red</option><option value="g">Green</option><option value="b">Blue</option></select>
+<label><input type="checkbox" id="news"> Get the newsletter</label>
+<button onclick="out('clicked:plain')">Show details</button>
+<button onclick="out('sent')">Send message</button>
+<button onclick="out('ordered')">Place order</button>
+<button onclick="out('deleted')">Delete account</button>
+<input type="file" id="file">
+<div id="chat" contenteditable="true" aria-label="Write a message"></div>
+<div id="out"></div>
+<div id="chatout"></div>
+<script>
+function out(s){ document.getElementById('out').textContent = s; }
+document.getElementById('chat').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); document.getElementById('chatout').textContent = 'posted:' + e.target.innerText; e.target.innerText=''; }
+});
+</script>
+</body></html>

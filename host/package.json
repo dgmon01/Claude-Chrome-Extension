@@ -1,0 +1,11 @@
+{
+  "name": "my-browser-host",
+  "version": "1.0.0",
+  "description": "My Browser: links the My Browser Chrome extension to the Claude PC app (local MCP server).",
+  "main": "server.js",
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "ws": "8.18.3"
+  }
+}
