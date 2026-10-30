@@ -316,18 +316,34 @@ async function point(tabId, args, key = 'coordinate') {
   return [Math.round(c[0]), Math.round(c[1])];
 }
 
+function jpegSize(b64) {
+  const b = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  for (let i = 2; i < b.length - 9;) {
+    if (b[i] !== 0xff) { i++; continue; }
+    const m = b[i + 1];
+    if (m >= 0xc0 && m <= 0xc3) return [(b[i + 7] << 8) | b[i + 8], (b[i + 5] << 8) | b[i + 6]];
+    i += 2 + ((b[i + 2] << 8) | b[i + 3]);
+  }
+  return null;
+}
+
+// The image must be in the same CSS pixels that clicks use, whatever the screen scaling.
 async function screenshot(tabId) {
+  const v = await cdp(tabId, 'Runtime.evaluate', { expression: 'JSON.stringify([innerWidth, innerHeight])', returnByValue: true });
+  const [w, h] = JSON.parse(v.result.value);
   const m = await cdp(tabId, 'Page.getLayoutMetrics');
   const vp = m.cssVisualViewport || m.visualViewport;
-  const d = await cdp(tabId, 'Runtime.evaluate', { expression: 'devicePixelRatio', returnByValue: true });
-  const dpr = (d.result && d.result.value) || 1;
-  const params = { format: 'jpeg', quality: 75 };
-  if (dpr !== 1) params.clip = { x: vp.pageX, y: vp.pageY, width: vp.clientWidth, height: vp.clientHeight, scale: 1 / dpr };
-  const shot = await cdp(tabId, 'Page.captureScreenshot', params);
+  const clip = { x: vp.pageX, y: vp.pageY, width: w, height: h, scale: 1 };
+  let shot = await cdp(tabId, 'Page.captureScreenshot', { format: 'jpeg', quality: 75, clip });
+  const size = jpegSize(shot.data);
+  if (size && Math.abs(size[0] - w) > 2) {
+    clip.scale = w / size[0];
+    shot = await cdp(tabId, 'Page.captureScreenshot', { format: 'jpeg', quality: 75, clip });
+  }
   return {
     content: [
       { type: 'image', data: shot.data, mimeType: 'image/jpeg' },
-      { type: 'text', text: `Screenshot of tab ${tabId}, ${Math.round(vp.clientWidth)}x${Math.round(vp.clientHeight)}. Use coordinates from this image for clicks.` },
+      { type: 'text', text: `Screenshot of tab ${tabId}, ${w}x${h}. Use coordinates from this image for clicks.` },
     ],
   };
 }

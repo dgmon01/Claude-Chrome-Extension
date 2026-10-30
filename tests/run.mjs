@@ -47,6 +47,7 @@ const context = await chromium.launchPersistentContext(userDir, {
   channel: 'chromium',
   headless: true,
   viewport: { width: 1200, height: 800 },
+  deviceScaleFactor: Number(process.env.DPR) || 1,
   args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`],
 });
 
@@ -200,6 +201,20 @@ try {
     const shot = await call('computer', { tabId: TAB, action: 'screenshot' });
     const img = (shot.content || []).find((c) => c.type === 'image');
     check('screenshot returns an image', img && img.data.length > 1000 && img.mimeType === 'image/jpeg', textOf(shot));
+    const jpegSize = (b64) => {
+      const b = Buffer.from(b64, 'base64');
+      for (let i = 2; i < b.length - 9;) {
+        if (b[i] !== 0xff) { i++; continue; }
+        const m = b[i + 1];
+        if (m >= 0xc0 && m <= 0xc3) return [b.readUInt16BE(i + 7), b.readUInt16BE(i + 5)];
+        i += 2 + b.readUInt16BE(i + 2);
+      }
+      return null;
+    };
+    const vw = JSON.parse(await js('JSON.stringify([innerWidth, innerHeight])'));
+    const told = (textOf(shot).match(/(\d+)x(\d+)/) || []).slice(1).map(Number);
+    const size = img && jpegSize(img.data);
+    check(`screenshot is in page coordinates (scale ${process.env.DPR || 1})`, size && Math.abs(size[0] - vw[0]) <= 2 && Math.abs(size[0] - told[0]) <= 2 && Math.abs(size[1] - told[1]) <= 2, JSON.stringify({ size, told, vw }));
 
     // Plain click by ref: no confirmation.
     const details = await findRef('show details');
