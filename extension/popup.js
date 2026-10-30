@@ -9,9 +9,14 @@ async function refresh() {
   $('enabled').checked = s.enabled;
   $('port').value = s.port;
   const [color, text] = !s.enabled ? ['#757575', 'Switched off. Claude cannot use this browser.']
+    : s.stopped ? ['#c62828', 'Stopped. Claude cannot use this browser until you press Resume.']
     : s.connected ? ['#2e7d32', 'Connected to the Claude app.']
     : ['#ef6c00', 'Waiting for the My Browser program. Open the Claude app.'];
   $('status').innerHTML = `<span class="dot" style="background:${color}"></span>${text}`;
+  $('problem').textContent = s.enabled ? s.pairProblem : '';
+  $('code').textContent = s.code;
+  $('stop').textContent = s.stopped ? 'Resume' : 'Stop';
+  $('stop').dataset.stopped = s.stopped ? '1' : '';
   $('log').innerHTML = s.log.length
     ? s.log.map((l) => `<li>${l.ok ? '✓' : '✗'} <b>${esc(l.time)}</b> ${esc(l.tool)} <span class="muted">${esc(l.what)}</span></li>`).join('')
     : '<li class="muted">Nothing yet.</li>';
@@ -27,7 +32,8 @@ function esc(s) {
 }
 
 $('enabled').addEventListener('change', async (e) => { await send({ type: 'setEnabled', enabled: e.target.checked }); refresh(); });
-$('stop').addEventListener('click', async () => { await send({ type: 'stop' }); $('stop').textContent = 'Stopped'; setTimeout(() => { $('stop').textContent = 'Stop'; }, 1500); });
+$('stop').addEventListener('click', async () => { await send({ type: $('stop').dataset.stopped ? 'resume' : 'stop' }); refresh(); });
+$('copy').addEventListener('click', async () => { await navigator.clipboard.writeText($('code').textContent); $('copy').textContent = 'Copied'; setTimeout(() => { $('copy').textContent = 'Copy'; }, 1500); });
 $('share').addEventListener('click', async () => {
   if (activeTabId == null) return;
   const r = await send({ type: $('share').dataset.shared ? 'unshare' : 'share', tabId: activeTabId });

@@ -188,13 +188,17 @@ export function pageAgent(cmd, args) {
 
   // Ask-first list: pay/buy, send messages, post, delete, change account settings, upload.
   const RISK = [
-    ['pay or buy', /\b(pay|payment|buy|purchase|checkout|check out|place (your )?order|order now|confirm (order|purchase|payment)|complete (order|purchase)|add funds|donate|subscribe|upgrade|transfer|send money)\b/i],
-    ['send a message or post', /\b(send|reply|reply all|forward|post|publish|tweet|comment|submit)\b/i],
+    ['pay or buy', /\b(pay|payment|buy|purchase|checkout|check out|place (your )?order|order now|confirm (order|purchase|payment|booking)|complete (order|purchase|booking)|book now|reserve|place bid|bid now|pre-?order|rent now|add funds|donate|subscribe|upgrade|transfer|send money)\b/i],
+    ['send a message or post', /\b(send|reply|reply all|forward|post|publish|tweet|retweet|repost|share now|comment|submit)\b/i],
     ['delete something', /\b(delete|remove|trash|discard|erase|clear (all|history|data)|deactivate|close (my )?account|unsubscribe|cancel (my )?(subscription|membership|order|plan))\b/i],
     ['change account settings', /\b(save (changes|settings|preferences|profile)|update (settings|profile|password|email|account)|change (password|email)|apply changes)\b/i],
     ['upload a file', /\b(upload|attach)\b/i],
   ];
-  const SETTINGS_PAGE = /(setting|account|preference|privacy|security|profile|billing)/i;
+  // Settings pages: judged from the address path only (not the domain or query).
+  const SETTINGS_PAGE = /(^|[\/_.-])(settings?|account|preferences?|privacy|security|billing|profile\/edit)([\/_.-]|$)/i;
+  const onSettingsPage = () => SETTINGS_PAGE.test(location.pathname);
+  // Embedded frames this page can't look inside: payment, comment and chat widgets.
+  const RISKY_FRAME = /(pay|checkout|stripe|braintree|adyen|klarna|afterpay|apple|wallet|billing|purchase|comment|disqus|chat|intercom|zendesk|messenger|crisp|drift|livechat|tawk|hubspot)/i;
 
   function labelOf(el) {
     return clean(el.getAttribute('aria-label') || el.innerText || el.value || el.title || el.getAttribute('alt') || '', 80);
@@ -213,14 +217,23 @@ export function pageAgent(cmd, args) {
     const label = labelOf(act);
     const fileInput = (tag === 'input' && type === 'file') || (tag === 'label' && act.control && act.control.type === 'file');
     if (fileInput) return { risky: true, what: 'upload a file', label: label || 'file upload' };
-    let what = riskOfLabel(label);
+    if (tag === 'iframe') {
+      const desc = `${act.src || ''} ${act.title || ''} ${act.name || ''} ${act.id || ''}`;
+      return RISKY_FRAME.test(desc)
+        ? { risky: true, what: 'act inside an embedded payment, comment or chat box (My Browser cannot see its buttons)', label: clean(act.title || act.src, 60) }
+        : { risky: false, label: '' };
+    }
+    // Long link texts are headlines, not action buttons ("Should you buy a house...").
+    let what = tag === 'a' && label.length > 30 ? null : riskOfLabel(label);
+    // A bare Save/Update/Apply/Confirm on a settings page changes account settings.
+    if (!what && onSettingsPage() && /^(save|update|apply|confirm|done|ok)\b/i.test(label)) what = 'change account settings';
     const isSubmit = (tag === 'button' && (type === '' || type === 'submit')) || (tag === 'input' && (type === 'submit' || type === 'image'));
     const form = act.form || act.closest('form');
     if (!what && isSubmit && form && /(checkout|pay|purchase|order|delete|remove|send|post|comment|reply|upload|settings|account)/i.test(form.getAttribute('action') || '')) {
       what = 'submit this form (its address suggests a payment, message, post, deletion, upload or settings change)';
     }
     const toggle = ['checkbox', 'radio', 'switch'].includes(roleOf(act)) || tag === 'select' || (tag === 'label' && act.control && ['checkbox', 'radio'].includes(act.control.type));
-    if (!what && toggle && SETTINGS_PAGE.test(location.href)) what = 'change account settings';
+    if (!what && toggle && onSettingsPage()) what = 'change account settings';
     return what ? { risky: true, what, label } : { risky: false, label };
   }
 
@@ -228,12 +241,19 @@ export function pageAgent(cmd, args) {
     const ae = deepActive();
     if (!ae || ae === document.body) return { risky: false };
     const tag = ae.tagName.toLowerCase();
+    if (tag === 'iframe') return { risky: true, what: 'press Enter inside an embedded frame (My Browser cannot see what it would do)', label: clean(ae.title || ae.src, 60) };
     const type = (ae.getAttribute('type') || 'text').toLowerCase();
     const editable = ae.isContentEditable || tag === 'textarea' ||
       (tag === 'input' && !['button', 'submit', 'reset', 'image', 'checkbox', 'radio', 'file', 'range', 'color'].includes(type));
     if (!editable) return riskOfElement(ae);
     const form = ae.form || ae.closest('form');
     const label = `${ae.getAttribute('aria-label') || ''} ${ae.getAttribute('placeholder') || ''} ${ae.getAttribute('name') || ''} ${ae.getAttribute('role') || ''} ${type}`;
+    const searchy = /search|find|filter|query|url|address|\bq\b/i.test(label) || type === 'search';
+    if (searchy) return { risky: false };
+    // The field's own label: message, comment and chat boxes send on Enter.
+    if (/message|comment|reply|chat|compose|write|tweet|post|caption/i.test(label)) {
+      return { risky: true, what: 'send a message or post (Enter in a message box usually sends it)', label: clean(label) };
+    }
     if (form) {
       const buttons = [...form.querySelectorAll('button:not([type]), button[type=submit], input[type=submit], input[type=image]')];
       for (const b of buttons) {
@@ -245,7 +265,6 @@ export function pageAgent(cmd, args) {
       }
       return { risky: false };
     }
-    if (/search|find|filter|query|url|address|\bq\b/i.test(label) || type === 'search') return { risky: false };
     return { risky: true, what: 'send a message or post (Enter in a message box usually sends it)', label: clean(label) || 'text box' };
   }
 
@@ -313,6 +332,7 @@ export function pageAgent(cmd, args) {
     case 'refRect': return refRect(args);
     case 'riskAt': return riskOfElement(deepFromPoint(args.x, args.y));
     case 'riskEnter': return riskEnter();
+    case 'riskFocused': { const ae = deepActive(); return ae && ae !== document.body && !ae.isContentEditable && ae.tagName.toLowerCase() !== 'textarea' && !(ae.tagName.toLowerCase() === 'input' && !['button', 'submit', 'reset', 'image', 'checkbox', 'radio', 'file'].includes((ae.getAttribute('type') || 'text').toLowerCase())) ? riskOfElement(ae) : { risky: false }; }
     case 'formInput': return formInput(args);
     case 'info': return { title: document.title, url: location.href, w: innerWidth, h: innerHeight, dpr: devicePixelRatio };
     default: throw new Error('unknown page command ' + cmd);

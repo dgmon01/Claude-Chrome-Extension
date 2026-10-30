@@ -16,7 +16,8 @@
         "${__dirname}/server.js"
       ],
       "env": {
-        "MY_BROWSER_PORT": "${user_config.port}"
+        "MY_BROWSER_PORT": "${user_config.port}",
+        "MY_BROWSER_CODE": "${user_config.pairing_code}"
       }
     }
   },
@@ -51,7 +52,7 @@
     },
     {
       "name": "computer",
-      "description": "Use the mouse and keyboard in a tab, or take a screenshot. Coordinates are CSS pixels in the visible part of the page (as in the screenshot). You can pass ref instead of coordinate for clicks."
+      "description": "Use the mouse and keyboard in a tab, or take a screenshot. Coordinates are pixels in the latest screenshot of that tab (take one first). You can pass ref instead of coordinate for clicks."
     },
     {
       "name": "form_input",
@@ -59,7 +60,7 @@
     },
     {
       "name": "javascript_tool",
-      "description": "Run JavaScript in the page and return the result of the last expression (top-level await and return are allowed)."
+      "description": "Run JavaScript in the page and return the result of the last expression (top-level await and return are allowed). Use it to read or inspect the page. Do not use it to click buttons, submit forms or send data: use computer or form_input, so the ask-first check runs (it does not cover this tool)."
     }
   ],
   "keywords": [
@@ -78,6 +79,13 @@
     }
   },
   "user_config": {
+    "pairing_code": {
+      "type": "string",
+      "title": "Pairing code",
+      "description": "Copy it from the My Browser toolbar popup in Chrome (Copy button). It lets this program and your Chrome extension recognise each other, so no other program can drive your browser.",
+      "required": true,
+      "sensitive": true
+    },
     "port": {
       "type": "number",
       "title": "Port",

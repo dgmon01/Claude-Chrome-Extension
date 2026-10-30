@@ -1,0 +1,20 @@
+<!doctype html><html><head><title>Risky page</title>
+<style>button{display:block;margin:4px;padding:4px}</style></head>
+<body>
+<a href="#headline" id="headline">Should you buy a house in this market? Experts weigh in</a>
+<button onclick="out('repost')">Repost</button>
+<button onclick="out('sharenow')">Share now</button>
+<button onclick="out('booking')">Complete booking</button>
+<button onclick="out('bid')">Place bid</button>
+<button id="paynow" onclick="out('paynow')">Pay now</button>
+<form id="cform" onsubmit="event.preventDefault(); out('commented')">
+  <input id="comment" placeholder="Write a comment">
+  <button aria-label=""><svg width="12" height="12"><circle cx="6" cy="6" r="5"/></svg></button>
+</form>
+<iframe id="payframe" src="http://localhost:8123/pay.html" width="300" height="100"></iframe>
+<div id="out"></div>
+<script>
+function out(s){ document.getElementById('out').textContent = s; }
+addEventListener('message', (e) => out(String(e.data)));
+</script>
+</body></html>

@@ -14,14 +14,19 @@
   .muted { color: #777; }
   details { margin-top: 10px; }
   input[type=number] { width: 80px; }
+  #code { font-size: 14px; letter-spacing: 1px; }
+  #problem { color: #c62828; margin: 6px 0; }
 </style>
 </head>
 <body>
   <h1>My Browser</h1>
   <div id="status"></div>
+  <div id="problem"></div>
   <div class="row"><label for="enabled">On</label><input type="checkbox" id="enabled"></div>
   <div class="row"><button id="stop">Stop</button></div>
   <div class="row"><button id="share"></button></div>
+  <div class="muted">Pairing code (paste it into My Browser in the Claude app)</div>
+  <div class="row"><code id="code"></code><button id="copy" style="width:auto">Copy</button></div>
   <div class="muted">Recent actions</div>
   <ul id="log"></ul>
   <details>

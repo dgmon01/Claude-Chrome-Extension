@@ -46,16 +46,27 @@ const userDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mb-profile-'));
 const context = await chromium.launchPersistentContext(userDir, {
   channel: 'chromium',
   headless: true,
-  viewport: { width: 1200, height: 800 },
+  viewport: process.env.VIEW ? { width: Number(process.env.VIEW.split('x')[0]), height: Number(process.env.VIEW.split('x')[1]) } : { width: 1200, height: 800 },
   deviceScaleFactor: Number(process.env.DPR) || 1,
   args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`],
 });
+
+async function popup() {
+  const p = await context.newPage();
+  await p.goto(`chrome-extension://${EXT_ID}/popup.html`);
+  return p;
+}
+
+// The pairing code the extension made at install (the user copies it from the popup).
+const firstPopup = await popup();
+const CODE = (await firstPopup.evaluate(() => chrome.runtime.sendMessage({ type: 'status' }))).code;
+await firstPopup.close();
 
 // ---- the PC program, through a real MCP client ----
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [path.join(process.env.HOST_DIR || path.join(root, 'host'), 'server.js')],
-  env: { ...process.env, MY_BROWSER_PORT: String(PORT) },
+  env: { ...process.env, MY_BROWSER_PORT: String(PORT), MY_BROWSER_CODE: CODE.toLowerCase() },
   stderr: 'pipe',
 });
 const hostLog = [];
@@ -63,12 +74,6 @@ transport.stderr && transport.stderr.on('data', (d) => hostLog.push(String(d)));
 const client = new Client({ name: 'my-browser-test', version: '1.0.0' });
 await client.connect(transport);
 const call = (name, args = {}) => client.callTool({ name, arguments: args });
-
-async function popup() {
-  const p = await context.newPage();
-  await p.goto(`chrome-extension://${EXT_ID}/popup.html`);
-  return p;
-}
 
 try {
   // ---------------- Stage 1: link, tools list, tabs ----------------
@@ -136,7 +141,12 @@ try {
     await pop.evaluate(() => chrome.runtime.sendMessage({ type: 'stop' }));
     const stopped = await waiting;
     check('Stop cancels the running action', stopped.isError && /Stopped by the user/.test(textOf(stopped)), textOf(stopped));
-    await new Promise((r) => setTimeout(r, 5200));
+    await new Promise((r) => setTimeout(r, 6000));
+    const still = await call('tabs_context_mcp');
+    check('Stop stays in force (6 s later, still refused)', still.isError && /Stopped by the user/.test(textOf(still)), textOf(still));
+    await pop.evaluate(() => chrome.runtime.sendMessage({ type: 'resume' }));
+    const resumed = await call('tabs_context_mcp');
+    check('Resume makes the tools work again', !resumed.isError, textOf(resumed));
 
     const status = await pop.evaluate(() => chrome.runtime.sendMessage({ type: 'status' }));
     // Only our extension may connect to the PC program: a web page or other program is refused.
@@ -147,6 +157,51 @@ try {
       s.on('error', () => resolve('refused'));
     });
     check('a web page cannot connect to the PC program', (await tryOrigin('https://evil.example')) === 'refused');
+    // A program faking the extension's origin but without the pairing code is refused.
+    const fake = await new Promise((resolve) => {
+      const s = new WS(`ws://127.0.0.1:${PORT}`, { origin: `chrome-extension://${EXT_ID}` });
+      s.on('message', (raw) => {
+        const m = JSON.parse(raw);
+        if (m.type === 'challenge') s.send(JSON.stringify({ type: 'hello', mac: 'f'.repeat(64), nonce: 'abc' }));
+        if (m.type === 'denied') resolve('denied');
+        if (m.type === 'welcome') resolve('accepted');
+      });
+      s.on('error', () => resolve('error'));
+      setTimeout(() => resolve('timeout'), 5000);
+    });
+    check('a program without the pairing code is refused by the PC program', fake === 'denied', fake);
+    const stillWorks = await call('tabs_context_mcp');
+    check('the real extension keeps its link after that', !stillWorks.isError, textOf(stillWorks));
+
+    // A program on the port that doesn't know the code gets no obedience from the extension.
+    const rogue = new WS.WebSocketServer({ host: '127.0.0.1', port: PORT + 1 });
+    const rogueResult = new Promise((resolve) => {
+      rogue.on('connection', (s) => {
+        s.send(JSON.stringify({ type: 'challenge', nonce: '00' }));
+        s.on('message', (raw) => {
+          const m = JSON.parse(raw);
+          if (m.type === 'hello') {
+            s.send(JSON.stringify({ type: 'welcome', mac: '0'.repeat(64) }));
+            s.send(JSON.stringify({ type: 'call', id: 1, tool: 'tabs_create_mcp', args: { url: 'about:blank#rogue' } }));
+          }
+          if (m.type === 'result') resolve('obeyed');
+        });
+        s.on('close', () => resolve('closed'));
+      });
+      setTimeout(() => resolve('ignored'), 8000);
+    });
+    await pop.evaluate((p) => chrome.runtime.sendMessage({ type: 'setPort', port: p }), PORT + 1);
+    const rr = await rogueResult;
+    check('the extension ignores a program that does not know the pairing code', rr !== 'obeyed', rr);
+    await pop.evaluate((p) => chrome.runtime.sendMessage({ type: 'setPort', port: p }), PORT);
+    rogue.close();
+    let back;
+    for (let i = 0; i < 15; i++) {
+      back = await call('tabs_context_mcp');
+      if (!back.isError) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    check('the extension reconnects to the real program', !back.isError, textOf(back));
     check('another extension cannot connect', (await tryOrigin('chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')) === 'refused');
 
     check('popup shows connected and a log of recent actions', status.connected && status.log.length > 0, JSON.stringify(status).slice(0, 300));
@@ -214,7 +269,10 @@ try {
     const vw = JSON.parse(await js('JSON.stringify([innerWidth, innerHeight])'));
     const told = (textOf(shot).match(/(\d+)x(\d+)/) || []).slice(1).map(Number);
     const size = img && jpegSize(img.data);
-    check(`screenshot is in page coordinates (scale ${process.env.DPR || 1})`, size && Math.abs(size[0] - vw[0]) <= 2 && Math.abs(size[0] - told[0]) <= 2 && Math.abs(size[1] - told[1]) <= 2, JSON.stringify({ size, told, vw }));
+    const fitW = Math.round(vw[0] * Math.min(1, 1568 / Math.max(...vw), Math.sqrt(1150000 / (vw[0] * vw[1]))));
+    const small = vw[0] <= 1568 && vw[0] * 1100 <= 1150000;
+    check(`screenshot matches what the tool reports, full size when small (scale ${process.env.DPR || 1})`, size && Math.abs(size[0] - told[0]) <= 2 && Math.abs(size[1] - told[1]) <= 2 && size[0] <= 1568 && (!small || Math.abs(size[0] - fitW) <= 2), JSON.stringify({ size, told, vw, fitW }));
+    globalThis.SHOT_F = size[0] / vw[0];
 
     // Plain click by ref: no confirmation.
     const details = await findRef('show details');
@@ -224,7 +282,7 @@ try {
     // Click by coordinate.
     const box = await js("JSON.stringify((r => [r.left + r.width/2, r.top + r.height/2])(document.querySelector('#name').getBoundingClientRect()))");
     const [nx, ny] = JSON.parse(box);
-    await call('computer', { tabId: TAB, action: 'left_click', coordinate: [nx, ny] });
+    await call('computer', { tabId: TAB, action: 'left_click', coordinate: [Math.round(nx * SHOT_F), Math.round(ny * SHOT_F)] });
     await call('computer', { tabId: TAB, action: 'type', text: 'Dhanush' });
     check('click by coordinate then type', (await js("document.getElementById('name').value")) === 'Dhanush');
     await call('computer', { tabId: TAB, action: 'key', text: 'ctrl+a Backspace' });
@@ -281,6 +339,51 @@ try {
     const saveRef = await findRef('save changes');
     const s3 = await call('computer', { tabId: TAB, action: 'left_click', ref: saveRef });
     check('"Save changes" stops and asks first', /NEEDS CONFIRMATION/.test(textOf(s3)), textOf(s3));
+
+    // Audit fixes: more button words, Space key, iframes, icon-only send, headlines.
+    await call('navigate', { tabId: TAB, url: `${WEB}/risky.html` });
+    await new Promise((r) => setTimeout(r, 800));
+    for (const [q, label] of [['repost', 'Repost'], ['share now', 'Share now'], ['complete booking', 'Complete booking'], ['place bid', 'Place bid']]) {
+      const ref = await findRef(q);
+      const r = await call('computer', { tabId: TAB, action: 'left_click', ref });
+      check(`"${label}" stops and asks first`, /NEEDS CONFIRMATION/.test(textOf(r)) && (await js("document.getElementById('out').textContent")) === '', textOf(r));
+    }
+    await js("document.getElementById('paynow').focus()");
+    const sp = await call('computer', { tabId: TAB, action: 'key', text: 'space' });
+    check('Space on a focused "Pay now" stops and asks first', /NEEDS CONFIRMATION/.test(textOf(sp)) && (await js("document.getElementById('out').textContent")) === '', textOf(sp));
+    const frameBox = JSON.parse(await js("JSON.stringify((r => [r.left + 100, r.top + 30])(document.getElementById('payframe').getBoundingClientRect()))"));
+    await call('computer', { tabId: TAB, action: 'screenshot' });
+    const ifr = await call('computer', { tabId: TAB, action: 'left_click', coordinate: frameBox });
+    check('click on a payment box inside an iframe stops and asks first', /NEEDS CONFIRMATION/.test(textOf(ifr)) && (await js("document.getElementById('out').textContent")) === '', textOf(ifr));
+    const cref = await findRef('write a comment');
+    await call('computer', { tabId: TAB, action: 'left_click', ref: cref });
+    await call('computer', { tabId: TAB, action: 'type', text: 'nice' });
+    const ce = await call('computer', { tabId: TAB, action: 'key', text: 'Enter' });
+    check('Enter in a comment box with an icon-only button stops and asks first', /NEEDS CONFIRMATION/.test(textOf(ce)) && (await js("document.getElementById('out').textContent")) === '', textOf(ce));
+    check('the confirmation message quotes page text without quote marks', !/"/.test((textOf(ce).match(/\((button or field text[^)]*)\)/) || ['', ''])[1]), textOf(ce));
+    const hl = await call('computer', { tabId: TAB, action: 'left_click', ref: await findRef('should you buy a house') });
+    check('a long headline link with "buy" in it goes through', !/NEEDS CONFIRMATION/.test(textOf(hl)), textOf(hl));
+    await call('navigate', { tabId: TAB, url: `${WEB}/account/plain.html` });
+    const bare = await call('computer', { tabId: TAB, action: 'left_click', ref: await findRef('save') });
+    check('a bare "Save" on an account page stops and asks first', /NEEDS CONFIRMATION/.test(textOf(bare)), textOf(bare));
+
+    // javascript_tool: a runtime error that mentions "return" must not run the code twice.
+    await js("window.__runs = 0");
+    await js("window.__runs++; throw new Error('please return later')");
+    check('javascript_tool does not run code twice after an error', (await js('window.__runs')) === '1');
+
+    // Click by screenshot coordinates (big screens get a shrunk screenshot).
+    await call('navigate', { tabId: TAB, url: `${WEB}/form.html` });
+    const shot2 = await call('computer', { tabId: TAB, action: 'screenshot' });
+    const im2 = (shot2.content || []).find((c) => c.type === 'image');
+    const sz2 = jpegSize(im2.data);
+    const iw = JSON.parse(await js('JSON.stringify([innerWidth, innerHeight])'));
+    check(`screenshot fits Claude's image limit (${process.env.VIEW || '1200x800'})`, sz2[0] <= 1568 && sz2[0] * sz2[1] <= 1150000 * 1.01, JSON.stringify(sz2));
+    const f = sz2[0] / iw[0];
+    const det = JSON.parse(await js("JSON.stringify((r => [r.left + r.width/2, r.top + r.height/2])([...document.querySelectorAll('button')].find(b => b.textContent === 'Show details').getBoundingClientRect()))"));
+    await js("document.getElementById('out').textContent = ''");
+    await call('computer', { tabId: TAB, action: 'left_click', coordinate: [Math.round(det[0] * f), Math.round(det[1] * f)] });
+    check('a click at screenshot coordinates hits the right button', (await js("document.getElementById('out').textContent")) === 'clicked:plain');
 
     // Scroll, hover, wait.
     await call('navigate', { tabId: TAB, url: `${WEB}/long.html` });

@@ -1,6 +1,6 @@
 # Plan: custom Claude browser connector ("My Browser")
 
-Status: PLAN ONLY, waiting for Dhanush's go. Nothing is built yet.
+Status: BUILT and audited (see README.md and AUDIT.md). Waiting for the install test on Dhanush's PC.
 Written 30 Oct 2026, 2:46 PM IST.
 
 ## 1. Why we're building this

@@ -7,6 +7,11 @@ import { pageAgent } from './page.js';
 const GROUP_TITLE = 'My Browser';
 const attached = new Set();
 const idleTimers = new Map();
+// Screenshots of big windows are shrunk to fit what Claude reads (about 1568 px / 1.15 megapixels);
+// coordinates Claude sends back are in screenshot pixels and are scaled up again here.
+const shotScale = new Map(); // tabId -> image pixels per page pixel
+const MAX_EDGE = 1568;
+const MAX_PIXELS = 1150000;
 
 chrome.debugger.onDetach.addListener((src) => attached.delete(src.tabId));
 
@@ -154,7 +159,9 @@ function waitForLoad(tabId, timeoutMs) {
 }
 
 function needsConfirm(what, label) {
-  return ok(`NEEDS CONFIRMATION - nothing was done. This looks like it would ${what}${label ? ` ("${label}")` : ''}. ` +
+  // The label comes from the web page: strip quotes and line breaks so it can't pose as instructions.
+  const safe = String(label || '').replace(/["'`\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+  return ok(`NEEDS CONFIRMATION - nothing was done. This looks like it would ${what}${safe ? ` (button or field text on the page: ${safe})` : ''}. ` +
     'Ask the user in the chat whether to go ahead. Only if they say yes, repeat the same call with "confirmed": true.');
 }
 
@@ -313,7 +320,8 @@ async function point(tabId, args, key = 'coordinate') {
   }
   const c = args[key];
   if (!Array.isArray(c) || c.length !== 2) throw new Error(`${key} [x, y] or ref is required for ${args.action}.`);
-  return [Math.round(c[0]), Math.round(c[1])];
+  const f = shotScale.get(tabId) || 1;
+  return [Math.round(c[0] / f), Math.round(c[1] / f)];
 }
 
 function jpegSize(b64) {
@@ -336,14 +344,18 @@ async function screenshot(tabId) {
   const clip = { x: vp.pageX, y: vp.pageY, width: w, height: h, scale: 1 };
   let shot = await cdp(tabId, 'Page.captureScreenshot', { format: 'jpeg', quality: 75, clip });
   const size = jpegSize(shot.data);
-  if (size && Math.abs(size[0] - w) > 2) {
-    clip.scale = w / size[0];
+  const fit = Math.min(1, MAX_EDGE / Math.max(w, h), Math.sqrt(MAX_PIXELS / (w * h)));
+  if (size && (Math.abs(size[0] - w * fit) > 2)) {
+    clip.scale = (w * fit) / size[0];
     shot = await cdp(tabId, 'Page.captureScreenshot', { format: 'jpeg', quality: 75, clip });
   }
+  shotScale.set(tabId, fit);
+  const iw = Math.round(w * fit);
+  const ih = Math.round(h * fit);
   return {
     content: [
       { type: 'image', data: shot.data, mimeType: 'image/jpeg' },
-      { type: 'text', text: `Screenshot of tab ${tabId}, ${w}x${h}. Use coordinates from this image for clicks.` },
+      { type: 'text', text: `Screenshot of tab ${tabId}, ${iw}x${ih}. Use coordinates from this image for clicks.` },
     ],
   };
 }
@@ -402,8 +414,8 @@ async function computer(args) {
       const keys = combos.map(parseCombo);
       let pressed = 0;
       for (const k of keys) {
-        if (k.isEnter && !confirmed) {
-          const risk = await inPage(tabId, 'riskEnter');
+        if ((k.isEnter || (k.key === ' ' && !k.mods)) && !confirmed) {
+          const risk = await inPage(tabId, k.isEnter ? 'riskEnter' : 'riskFocused');
           if (risk.risky) {
             const before = pressed ? ` (${pressed} key(s) before it were pressed)` : '';
             return needsConfirm(`${risk.what}${before}`, risk.label);
@@ -468,7 +480,7 @@ async function javascript_tool({ tabId, text, code }) {
   const opts = { awaitPromise: true, returnByValue: true, userGesture: true };
   let r = await cdp(tabId, 'Runtime.evaluate', { expression: src, replMode: true, ...opts });
   const errText = (x) => (x.exceptionDetails && ((x.exceptionDetails.exception && x.exceptionDetails.exception.description) || x.exceptionDetails.text)) || '';
-  if (r.exceptionDetails && /return/i.test(errText(r))) {
+  if (r.exceptionDetails && /^SyntaxError/.test(errText(r)) && /return/.test(errText(r))) {
     r = await cdp(tabId, 'Runtime.evaluate', { expression: `(async () => {\n${src}\n})()`, ...opts });
   }
   if (r.exceptionDetails) return fail(`JavaScript error: ${errText(r)}`);

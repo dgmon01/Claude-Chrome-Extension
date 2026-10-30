@@ -6,6 +6,7 @@
 'use strict';
 
 const readline = require('readline');
+const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const { TOOLS, INSTRUCTIONS } = require('./tools');
 
@@ -13,6 +14,8 @@ const VERSION = '1.0.0';
 const PORT = Number(process.env.MY_BROWSER_PORT) || 47615;
 // Only our extension may connect (its ID is fixed by the "key" in extension/manifest.json).
 const EXTENSION_ID = process.env.MY_BROWSER_EXTENSION_ID || 'knfgdpidabhgpedilggpjdeppcjpehpm';
+// The pairing code shown in the extension's toolbar popup; both sides must know it.
+const CODE = String(process.env.MY_BROWSER_CODE || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 
 const log = (...a) => process.stderr.write(`[my-browser] ${a.join(' ')}\n`);
@@ -21,6 +24,7 @@ const log = (...a) => process.stderr.write(`[my-browser] ${a.join(' ')}\n`);
 
 let ext = null; // the connected extension socket
 let portProblem = null;
+let pairProblem = null;
 let nextId = 1;
 const pending = new Map(); // id -> { resolve, timer }
 const waiters = [];
@@ -43,13 +47,36 @@ function listen() {
     setTimeout(listen, 5000);
   });
   wss.on('connection', (sock) => {
-    if (ext) ext.close();
-    ext = sock;
-    log('Chrome extension connected');
-    while (waiters.length) waiters.shift()();
+    const nonce = crypto.randomBytes(16).toString('hex');
+    let authed = false;
+    sock.send(JSON.stringify({ type: 'challenge', nonce }));
+    const timer = setTimeout(() => { if (!authed) sock.close(); }, 10000);
     sock.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw); } catch (e) { return; }
+      if (!authed) {
+        if (msg.type !== 'hello') return;
+        const ok = CODE && typeof msg.mac === 'string' && typeof msg.nonce === 'string' &&
+          safeEqual(msg.mac, hmac('ext:' + nonce));
+        if (!ok) {
+          pairProblem = CODE
+            ? "The pairing code set in the Claude app doesn't match the one in Chrome. Ask the user to copy the code from the My Browser toolbar popup into My Browser's settings in the Claude app (Settings > Extensions > My Browser), then restart Claude."
+            : "No pairing code is set. Ask the user to copy the code from the My Browser toolbar popup in Chrome into My Browser's settings in the Claude app (Settings > Extensions > My Browser), then restart Claude.";
+          log('pairing failed');
+          sock.send(JSON.stringify({ type: 'denied' }));
+          sock.close();
+          return;
+        }
+        authed = true;
+        pairProblem = null;
+        clearTimeout(timer);
+        sock.send(JSON.stringify({ type: 'welcome', mac: hmac('host:' + msg.nonce) }));
+        if (ext) ext.close();
+        ext = sock;
+        log('Chrome extension connected');
+        while (waiters.length) waiters.shift()();
+        return;
+      }
       if (msg.type === 'result' && pending.has(msg.id)) {
         const p = pending.get(msg.id);
         pending.delete(msg.id);
@@ -58,7 +85,9 @@ function listen() {
       }
     });
     sock.on('close', () => {
-      if (ext === sock) ext = null;
+      clearTimeout(timer);
+      if (ext !== sock) return;
+      ext = null;
       log('Chrome extension disconnected');
       for (const [id, p] of pending) {
         clearTimeout(p.timer);
@@ -67,6 +96,16 @@ function listen() {
       }
     });
   });
+}
+
+function hmac(message) {
+  return crypto.createHmac('sha256', CODE).update(message).digest('hex');
+}
+
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a));
+  const y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
 
 function errorResult(text) {
@@ -83,7 +122,7 @@ function waitForExtension(ms) {
 
 async function callExtension(tool, args) {
   if (!(await waitForExtension(10000))) {
-    return errorResult(portProblem ||
+    return errorResult(portProblem || pairProblem ||
       'The My Browser Chrome extension is not connected. Ask the user to open Chrome and check the My Browser toolbar icon is switched on (it shows ON when connected).');
   }
   const id = nextId++;
