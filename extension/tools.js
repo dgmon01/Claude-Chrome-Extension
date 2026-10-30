@@ -9,7 +9,8 @@ const attached = new Set();
 const idleTimers = new Map();
 // Screenshots of big windows are shrunk to fit what Claude reads (about 1568 px / 1.15 megapixels);
 // coordinates Claude sends back are in screenshot pixels and are scaled up again here.
-const shotScale = new Map(); // tabId -> image pixels per page pixel
+// Kept in chrome.storage.session (not memory) so it survives a service worker restart.
+const scaleKey = (tabId) => `shotScale_${tabId}`;
 const MAX_EDGE = 1568;
 const MAX_PIXELS = 1150000;
 
@@ -320,7 +321,7 @@ async function point(tabId, args, key = 'coordinate') {
   }
   const c = args[key];
   if (!Array.isArray(c) || c.length !== 2) throw new Error(`${key} [x, y] or ref is required for ${args.action}.`);
-  const f = shotScale.get(tabId) || 1;
+  const f = (await chrome.storage.session.get(scaleKey(tabId)))[scaleKey(tabId)] || 1;
   return [Math.round(c[0] / f), Math.round(c[1] / f)];
 }
 
@@ -349,7 +350,7 @@ async function screenshot(tabId) {
     clip.scale = (w * fit) / size[0];
     shot = await cdp(tabId, 'Page.captureScreenshot', { format: 'jpeg', quality: 75, clip });
   }
-  shotScale.set(tabId, fit);
+  await chrome.storage.session.set({ [scaleKey(tabId)]: fit });
   const iw = Math.round(w * fit);
   const ih = Math.round(h * fit);
   return {
