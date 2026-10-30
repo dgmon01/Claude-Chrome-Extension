@@ -34,6 +34,19 @@ function explain(e) {
   return m;
 }
 
+// Chrome briefly refuses tab changes while the tab strip is busy ("Tabs cannot be edited
+// right now (user may be dragging a tab)"). Retry for up to 2 seconds before giving up.
+async function tabEdit(fn) {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (i >= 10 || !/cannot be edited right now|dragging a tab/i.test(String(e && e.message))) throw e;
+      await sleep(200);
+    }
+  }
+}
+
 // ---- Tab group: Claude may use only tabs in the "My Browser" group ----
 
 async function groupIds() {
@@ -53,12 +66,12 @@ export async function isShared(tabId) {
 export async function shareTab(tabId) {
   const tab = await chrome.tabs.get(tabId);
   const [existing] = await chrome.tabGroups.query({ title: GROUP_TITLE, windowId: tab.windowId });
-  const groupId = await chrome.tabs.group(existing ? { tabIds: [tabId], groupId: existing.id } : { tabIds: [tabId] });
-  await chrome.tabGroups.update(groupId, { title: GROUP_TITLE, color: 'orange' });
+  const groupId = await tabEdit(() => chrome.tabs.group(existing ? { tabIds: [tabId], groupId: existing.id } : { tabIds: [tabId] }));
+  await tabEdit(() => chrome.tabGroups.update(groupId, { title: GROUP_TITLE, color: 'orange' }));
 }
 
 export async function unshareTab(tabId) {
-  await chrome.tabs.ungroup(tabId);
+  await tabEdit(() => chrome.tabs.ungroup(tabId));
 }
 
 async function checkTab(tabId) {
@@ -181,7 +194,7 @@ async function tabs_context_mcp({ createIfEmpty } = {}) {
   const ids = await groupIds();
   let tabs = (await chrome.tabs.query({})).filter((t) => ids.has(t.groupId));
   if (!tabs.length && createIfEmpty) {
-    const tab = await chrome.tabs.create({ url: 'about:blank', active: true });
+    const tab = await tabEdit(() => chrome.tabs.create({ url: 'about:blank', active: true }));
     await shareTab(tab.id);
     tabs = [await chrome.tabs.get(tab.id)];
   }
@@ -193,7 +206,7 @@ async function tabs_context_mcp({ createIfEmpty } = {}) {
 }
 
 async function tabs_create_mcp({ url } = {}) {
-  const tab = await chrome.tabs.create({ url: normalizeUrl(url) || 'about:blank', active: true });
+  const tab = await tabEdit(() => chrome.tabs.create({ url: normalizeUrl(url) || 'about:blank', active: true }));
   await shareTab(tab.id);
   if (url) await waitForLoad(tab.id, 30000);
   const t = await chrome.tabs.get(tab.id);
@@ -202,7 +215,7 @@ async function tabs_create_mcp({ url } = {}) {
 
 async function tabs_close_mcp({ tabId }) {
   await checkTab(tabId);
-  await chrome.tabs.remove(tabId);
+  await tabEdit(() => chrome.tabs.remove(tabId));
   return ok(`Closed tab ${tabId}.`);
 }
 
@@ -218,7 +231,7 @@ async function navigate({ tabId, url }) {
   }
   const wait = waitForLoad(tabId, 30000);
   if (entryId !== null) await cdp(tabId, 'Page.navigateToHistoryEntry', { entryId });
-  else await chrome.tabs.update(tabId, { url: normalizeUrl(url) });
+  else await tabEdit(() => chrome.tabs.update(tabId, { url: normalizeUrl(url) }));
   const loaded = await wait;
   let text = await pageSummary(tabId);
   try {
@@ -364,7 +377,7 @@ async function screenshot(tabId) {
 async function computer(args) {
   const { tabId, action, confirmed } = args;
   const tab = await checkTab(tabId);
-  if (!tab.active) await chrome.tabs.update(tabId, { active: true });
+  if (!tab.active) await tabEdit(() => chrome.tabs.update(tabId, { active: true }));
 
   switch (action) {
     case 'screenshot':

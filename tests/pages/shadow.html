@@ -1,0 +1,21 @@
+<!doctype html><html><head><title>Shadow feed</title></head>
+<body>
+<feed-app style="display:contents">
+  <search-bar></search-bar>
+  <div style="display:contents">
+    <article><a href="/text.html" id="post1">Copycat google chrome flag it</a></article>
+    <article><a href="/text.html">my dad cant find chrome so i did this</a></article>
+  </div>
+  <div style="visibility:hidden"><span style="visibility:visible"><button onclick="document.title='joined'">Join</button></span></div>
+  <div style="display:none"><button>Hidden button</button></div>
+</feed-app>
+<script>
+customElements.define('search-bar', class extends HTMLElement {
+  constructor() {
+    super();
+    const r = this.attachShadow({ mode: 'open' });
+    r.innerHTML = '<div style="display:contents"><input placeholder="Search in r/chrome" id="q"></div>';
+  }
+});
+</script>
+</body></html>

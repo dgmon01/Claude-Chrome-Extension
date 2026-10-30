@@ -230,6 +230,18 @@ try {
     const found = textOf(await call('find', { tabId: TAB, query: 'send message button' }));
     check('find returns the matching element first', /^- button "Send message"/m.test(found.split('---\n')[1] || ''), found);
 
+    // Sites like Reddit wrap content in display:contents elements and shadow DOM.
+    await call('navigate', { tabId: TAB, url: `${WEB}/shadow.html` });
+    const sf = textOf(await call('find', { tabId: TAB, query: 'search' }));
+    check('find sees a search box inside shadow DOM and display:contents', /textbox "Search in r\/chrome"/.test(sf), sf);
+    const sr = textOf(await call('read_page', { tabId: TAB, filter: 'interactive' }));
+    check('read_page lists links inside display:contents wrappers', /link "Copycat google chrome flag it"/.test(sr) && /link "my dad cant find chrome/.test(sr), sr);
+    check('read_page lists a visible button inside a visibility:hidden parent', /button "Join"/.test(sr), sr);
+    check('read_page still leaves out display:none content', !/Hidden button/.test(sr), sr);
+    await call('navigate', { tabId: TAB, url: `${WEB}/text.html` });
+    check('get_page_text includes the page heading', /Welcome to the test article/.test(textOf(await call('get_page_text', { tabId: TAB }))));
+    await call('navigate', { tabId: TAB, url: `${WEB}/form.html` });
+
     const back = await call('navigate', { tabId: TAB, url: 'back' });
     check('navigate back', /Test article/.test(textOf(back)), textOf(back));
     const fwd = await call('navigate', { tabId: TAB, url: 'forward' });

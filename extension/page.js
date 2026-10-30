@@ -94,10 +94,15 @@ export function pageAgent(cmd, args) {
     return checked ? (checked === 'true' ? 'checked' : 'unchecked') : '';
   }
 
-  function visible(el) {
-    if (el.checkVisibility) return el.checkVisibility({ checkVisibilityCSS: true });
+  // 'show': list it and look inside. 'pass': don't list it, but look inside (display:contents
+  // wrappers have no box of their own, and children of a visibility:hidden element can be
+  // visible). 'prune': hidden with everything inside it (display:none and the like).
+  function visibility(el) {
     const s = getComputedStyle(el);
-    return s.display !== 'none' && s.visibility !== 'hidden';
+    if (s.display === 'none') return 'prune';
+    if (s.display === 'contents' || s.visibility !== 'visible') return 'pass';
+    if (el.checkVisibility && !el.checkVisibility({ checkVisibilityCSS: true })) return 'prune';
+    return 'show';
   }
 
   function kids(el) {
@@ -128,8 +133,10 @@ export function pageAgent(cmd, args) {
       if (cut || d > depth || !(el instanceof Element)) return;
       const tag = el.tagName.toLowerCase();
       if (['script', 'style', 'noscript', 'template', 'svg', 'head'].includes(tag)) return;
-      if (el.getAttribute('aria-hidden') === 'true' || !visible(el)) return;
-      const role = roleOf(el);
+      if (el.getAttribute('aria-hidden') === 'true') return;
+      const vis = visibility(el);
+      if (vis === 'prune') return;
+      const role = vis === 'show' ? roleOf(el) : null;
       let shown = false;
       if (role && (filter === 'all' ? role !== 'paragraph' || clean(el.innerText) : INTERACTIVE.has(role))) {
         const l = line(el, role, filter === 'all' ? indent : 0);
@@ -154,8 +161,9 @@ export function pageAgent(cmd, args) {
       if (!(el instanceof Element)) return;
       const tag = el.tagName.toLowerCase();
       if (['script', 'style', 'noscript', 'template', 'svg'].includes(tag)) return;
-      if (!visible(el)) return;
-      const role = roleOf(el);
+      const vis = visibility(el);
+      if (vis === 'prune') return;
+      const role = vis === 'show' ? roleOf(el) : null;
       if (role && (INTERACTIVE.has(role) || role === 'heading')) {
         const hay = `${role} ${nameOf(el)} ${el.getAttribute('placeholder') || ''} ${el.getAttribute('name') || ''} ${el.id || ''}`.toLowerCase();
         let score = 0;
